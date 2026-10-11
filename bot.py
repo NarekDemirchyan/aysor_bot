@@ -8,8 +8,8 @@ TZ      = datetime.timezone(datetime.timedelta(hours=4))
 
 TITLE  = "Այս օրը պատմության մեջ"
 HANDLE = "@" + CHANNEL.lstrip("@")
-MONTHS = ["հունվարի","փետրվարի","մարտի","ապրիլի","մայիսի","հունիսի",
-          "հուլիսի","օգոստոսի","սեպտեմբերի","հոկտեմբերի","նոյեմբերի","դեկտեմբերի"]
+MONTHS = ["հունվարի", "փետրվարի", "մարտի", "ապրիլի", "մայիսի", "հունիսի",
+          "հուլիսի", "օգոստոսի", "սեպտեմբերի", "հոկտեմբերի", "նոյեմբերի", "դեկտեմբերի"]
 
 def get(lang, kind, m, d):
     url = (f"https://api.wikimedia.org/feed/v1/wikipedia/{lang}"
@@ -63,11 +63,12 @@ def render(head, blocks):
 
 def fit(head, blocks, limit=1024):
     while True:
-        text = render(head, blocks)
+        live = [b for b in blocks if len(b) > 1]
+        text = render(head, live)
         if len(text) <= limit:
             return text
         cut = False
-        for b in reversed(blocks):
+        for b in reversed(live):
             if len(b) > 1:
                 b.pop()
                 cut = True
@@ -102,7 +103,7 @@ def send(text, photo, chat):
 def main():
     now = datetime.datetime.now(TZ)
     m, d = now.month, now.day
-    plan = (("selected", 6), ("births", 4), ("deaths", 4), ("holidays", 3))
+    plan = (("selected", 4), ("births", 2), ("deaths", 2), ("holidays", 2))
 
     lang = "hy"
     data = {k: pick(get(lang, k, m, d), n) for k, n in plan}
@@ -115,10 +116,14 @@ def main():
 
     head = [f"<b>{TITLE}</b>", f"{d} {MONTHS[m-1]}"]
     blocks = []
-    if data["selected"]: blocks.append(section("Իրադարձություններ", data["selected"], lang))
-    if data["births"]:   blocks.append(section("Ծնունդներ", data["births"], lang))
-    if data["deaths"]:   blocks.append(section("Մահեր", data["deaths"], lang))
-    if data["holidays"]: blocks.append(section("Տոներ", data["holidays"], lang))
+    if data["selected"]:
+        blocks.append(section("Իրադարձություններ", data["selected"], lang))
+    if data["births"]:
+        blocks.append(section("Ծնունդներ", data["births"], lang))
+    if data["deaths"]:
+        blocks.append(section("Մահեր", data["deaths"], lang))
+    if data["holidays"]:
+        blocks.append(section("Տոներ", data["holidays"], lang))
 
     text = fit(head, blocks)
     photo = image_of(data)
