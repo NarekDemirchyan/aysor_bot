@@ -1,4 +1,4 @@
-import os, sys, time, datetime, requests
+import os, sys, time, html, datetime, requests
 
 TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 CHANNEL = os.environ.get("CHANNEL", "@patmutyun_aysor")
@@ -25,17 +25,29 @@ def pick(items, n):
     items.sort(key=lambda e: len(e.get("pages") or []), reverse=True)
     return items[:n]
 
-def fmt(e):
-    y = e.get("year")
-    if isinstance(y, int):
-        y = f"մ.թ.ա. {abs(y)}" if y < 0 else str(y)
-    else:
-        y = ""
-    return f"• {y} — {e['text'].strip()}"
+def tr(text, lang):
+    if lang == "hy":
+        return text
+    try:
+        r = requests.get("https://translate.googleapis.com/translate_a/single",
+                         params={"client": "gtx", "sl": "ru", "tl": "hy",
+                                 "dt": "t", "q": text}, timeout=20)
+        if r.status_code == 200:
+            out = "".join(p[0] for p in r.json()[0] if p and p[0])
+            if out.strip():
+                return out
+    except Exception as e:
+        print("translate error:", e)
+    return text
 
-def block(title, items, m):
-    lines = [f"<b>{title}</b> — {m} {MONTHS[m-1]}", ""]
-    lines += [fmt(e) for e in items]
+def fmt(e, lang):
+    y = e.get("year")
+    y = (f"մ.թ.ա. {abs(y)}" if y < 0 else str(y)) if isinstance(y, int) else ""
+    return f"• {y} — {html.escape(tr(e['text'].strip(), lang))}"
+
+def block(title, items, m, d, lang):
+    lines = [f"<b>{title}</b> — {d} {MONTHS[m-1]}", ""]
+    lines += [fmt(e, lang) for e in items]
     lines += ["", f"📓 https://t.me/{CHANNEL.lstrip('@')}"]
     return "\n".join(lines)
 
@@ -51,29 +63,27 @@ def send(text):
 def main():
     now = datetime.datetime.now(TZ)
     m, d = now.month, now.day
+    plan = (("selected", 5), ("births", 3), ("deaths", 3))
+
     lang = "hy"
-
-    events = pick(get(lang, "selected", m, d), 5)
-    births = pick(get(lang, "births", m, d), 3)
-    deaths = pick(get(lang, "deaths", m, d), 3)
-
-    if not events:
+    data = {k: pick(get(lang, k, m, d), n) for k, n in plan}
+    if not data["selected"]:
         lang = "ru"
-        events = pick(get(lang, "selected", m, d), 5)
-        births = pick(get(lang, "births", m, d), 3)
-        deaths = pick(get(lang, "deaths", m, d), 3)
+        data = {k: pick(get(lang, k, m, d), n) for k, n in plan}
 
-    if not events:
+    if not data["selected"]:
         print("Ֆիդը դատարկ է, ոչինչ չուղարկվեց")
         sys.exit(1)
 
-    parts = [block("Իրադարձություններ", events, m)]
-    if births: parts.append(block("Ծնունդներ", births, m))
-    if deaths: parts.append(block("Մահեր", deaths, m))
+    parts = [block("Իրադարձություններ", data["selected"], m, d, lang)]
+    if data["births"]:
+        parts.append(block("Ծնունդներ", data["births"], m, d, lang))
+    if data["deaths"]:
+        parts.append(block("Մահեր", data["deaths"], m, d, lang))
 
     for i, text in enumerate(parts):
         if TEST:
-            print("--- TEST, չուղարկվեց ---")
+            print("--- TEST ---")
             print(text, "\n")
         else:
             send(text)
