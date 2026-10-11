@@ -6,7 +6,6 @@ PREVIEW = os.environ.get("PREVIEW_CHAT", "")
 TEST    = os.environ.get("TEST", "1")
 TZ      = datetime.timezone(datetime.timedelta(hours=4))
 
-TITLE  = "Այս օրը պատմության մեջ"
 HANDLE = "@" + CHANNEL.lstrip("@")
 MONTHS = ["հունվարի", "փետրվարի", "մարտի", "ապրիլի", "մայիսի", "հունիսի",
           "հուլիսի", "օգոստոսի", "սեպտեմբերի", "հոկտեմբերի", "նոյեմբերի", "դեկտեմբերի"]
@@ -141,8 +140,7 @@ def main():
 
     yday  = now.timetuple().tm_yday
     total = datetime.date(now.year, 12, 31).timetuple().tm_yday
-    head  = (f"<b>{TITLE}</b>\n"
-             f"{d} {MONTHS[m-1]} — տարվա {yday}-րդ օրն է։\n"
+    head  = (f"{d} {MONTHS[m-1]} — տարվա {yday}-րդ օրն է։\n"
              f"Տարվա ավարտին մնում է {total - yday} օր։")
 
     msgs = pack(head, blocks)
