@@ -1,4 +1,4 @@
-import os, sys, html, datetime, requests
+import os, sys, re, html, time, datetime, requests
 
 TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 CHANNEL = os.environ.get("CHANNEL", "@patmutyun_aysor")
@@ -11,26 +11,66 @@ HANDLE = "@" + CHANNEL.lstrip("@")
 MONTHS = ["հունվարի", "փետրվարի", "մարտի", "ապրիլի", "մայիսի", "հունիսի",
           "հուլիսի", "օգոստոսի", "սեպտեմբերի", "հոկտեմբերի", "նոյեմբերի", "դեկտեմբերի"]
 
-def get(lang, kind, m, d):
+WIKI  = "https://hy.wikipedia.org/w/api.php"
+HEADS = {"Դեպքեր": "Իրադարձություններ", "Ծնունդներ": "Ծնունդներ",
+         "Մահեր": "Մահեր", "Տոներ": "Տոներ"}
+
+def wikitext(title):
+    try:
+        r = requests.get(WIKI, params={"action": "parse", "page": title,
+                                       "prop": "wikitext", "format": "json",
+                                       "formatversion": "2"},
+                         headers={"User-Agent": "aysor-bot/1.0"}, timeout=30)
+        if r.status_code != 200:
+            return ""
+        return (r.json().get("parse") or {}).get("wikitext") or ""
+    except Exception as e:
+        print("wiki error:", e)
+        return ""
+
+def clean(s):
+    s = re.sub(r"<ref[^>]*/>", "", s)
+    s = re.sub(r"<ref.*?</ref>", "", s, flags=re.S)
+    s = re.sub(r"\{\{[^{}]*\}\}", "", s)
+    s = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", s)
+    s = re.sub(r"\[\[([^\]]*)\]\]", r"\1", s)
+    s = re.sub(r"'''?", "", s)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\s[–-]\s", " — ", s, count=1)
+    return html.escape(s)
+
+def parse_sections(text):
+    out, cur = {}, None
+    for line in text.splitlines():
+        m = re.match(r"^\s*==+\s*([^=]+?)\s*==+\s*$", line)
+        if m:
+            cur = HEADS.get(m.group(1).strip())
+            if cur:
+                out.setdefault(cur, [])
+            continue
+        if cur and line.strip().startswith("*"):
+            item = clean(line.strip().lstrip("*").strip())
+            if item:
+                out[cur].append(item)
+    return out
+
+def feed(lang, kind, m, d):
     url = (f"https://api.wikimedia.org/feed/v1/wikipedia/{lang}"
            f"/onthisday/{kind}/{m}/{d}")
     try:
         r = requests.get(url, headers={"User-Agent": "aysor-bot/1.0"}, timeout=30)
         if r.status_code != 200:
             return []
-        return r.json().get(kind) or []
+        items = r.json().get(kind) or []
     except Exception as e:
         print("feed error:", e)
         return []
-
-def pick(items, n):
     items = [e for e in items if (e.get("text") or "").strip()]
     items.sort(key=lambda e: len(e.get("pages") or []), reverse=True)
-    return items[:n]
+    return items[:6]
 
-def tr(text, lang):
-    if lang == "hy":
-        return text
+def tr(text):
     try:
         r = requests.get("https://translate.googleapis.com/translate_a/single",
                          params={"client": "gtx", "sl": "ru", "tl": "hy",
@@ -43,57 +83,38 @@ def tr(text, lang):
         print("translate error:", e)
     return text
 
-def fmt(e, lang):
-    txt = html.escape(tr((e.get("text") or "").strip(), lang))
-    y = e.get("year")
-    if isinstance(y, int):
-        y = f"մ.թ.ա. {abs(y)}" if y < 0 else str(y)
-        return f"• {y} — {txt}"
-    return f"• {txt}"
+def events_from_feed(m, d):
+    out = []
+    for e in feed("ru", "selected", m, d):
+        txt = clean(tr((e.get("text") or "").strip()))
+        y = e.get("year")
+        if isinstance(y, int):
+            y = f"մ.թ.ա. {abs(y)}" if y < 0 else str(y)
+            out.append(f"{y} — {txt}")
+        else:
+            out.append(txt)
+    return out
 
-def section(name, items, lang):
-    return [f"<b>{name}</b>"] + [fmt(e, lang) for e in items]
+def pack(head, blocks, limit=4000):
+    msgs, cur = [], head + "\n\n"
+    for name, items in blocks:
+        for ln in [f"<b>{name}</b>"] + [f"• {i}" for i in items]:
+            if len(cur) + len(ln) + 1 > limit:
+                msgs.append(cur.strip())
+                cur = ""
+            cur += ln + "\n"
+        cur += "\n"
+    if cur.strip():
+        msgs.append(cur.strip())
+    if not msgs:
+        return []
+    if len(msgs[-1]) + len(HANDLE) + 2 <= limit:
+        msgs[-1] += "\n\n" + HANDLE
+    else:
+        msgs.append(HANDLE)
+    return msgs
 
-def render(head, blocks):
-    lines = list(head)
-    for b in blocks:
-        lines += ["", *b]
-    lines += ["", HANDLE]
-    return "\n".join(lines)
-
-def fit(head, blocks, limit=1024):
-    while True:
-        live = [b for b in blocks if len(b) > 1]
-        text = render(head, live)
-        if len(text) <= limit:
-            return text
-        cut = False
-        for b in reversed(live):
-            if len(b) > 1:
-                b.pop()
-                cut = True
-                break
-        if not cut:
-            return text
-
-def image_of(data):
-    for kind in ("selected", "births", "deaths"):
-        for e in data.get(kind, []):
-            for p in (e.get("pages") or []):
-                src = (p.get("thumbnail") or {}).get("source") or ""
-                if src and not src.lower().endswith(".svg"):
-                    return src
-    return None
-
-def send(text, photo, chat):
-    if photo:
-        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-                          json={"chat_id": chat, "photo": photo, "caption": text,
-                                "parse_mode": "HTML"}, timeout=60)
-        if r.ok:
-            print("photo: ok")
-            return True
-        print("photo fail:", r.text[:200])
+def send(text, chat):
     r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
                       json={"chat_id": chat, "text": text, "parse_mode": "HTML",
                             "disable_web_page_preview": True}, timeout=30)
@@ -103,39 +124,38 @@ def send(text, photo, chat):
 def main():
     now = datetime.datetime.now(TZ)
     m, d = now.month, now.day
-    plan = (("selected", 4), ("births", 2), ("deaths", 2), ("holidays", 2))
 
-    lang = "hy"
-    data = {k: pick(get(lang, k, m, d), n) for k, n in plan}
-    if not data["selected"]:
-        lang = "ru"
-        data = {k: pick(get(lang, k, m, d), n) for k, n in plan}
-    if not data["selected"]:
-        print("Ֆիդը դատարկ է")
+    sec = parse_sections(wikitext(f"Հոկտեմբերի {d}"))
+    ev = events_from_feed(m, d)
+
+    blocks = []
+    if ev:
+        blocks.append(("Իրադարձություններ", ev))
+    for name in ("Ծնունդներ", "Մահեր", "Տոներ"):
+        if sec.get(name):
+            blocks.append((name, sec[name]))
+
+    if not blocks:
+        print("Տվյալ չկա")
         sys.exit(1)
 
-    head = [f"<b>{TITLE}</b>", f"{d} {MONTHS[m-1]}"]
-    blocks = []
-    if data["selected"]:
-        blocks.append(section("Իրադարձություններ", data["selected"], lang))
-    if data["births"]:
-        blocks.append(section("Ծնունդներ", data["births"], lang))
-    if data["deaths"]:
-        blocks.append(section("Մահեր", data["deaths"], lang))
-    if data["holidays"]:
-        blocks.append(section("Տոներ", data["holidays"], lang))
-
-    text = fit(head, blocks)
-    photo = image_of(data)
+    msgs = pack(f"<b>{TITLE}</b>\n{d} {MONTHS[m-1]}", blocks)
+    print("հաղորդագրությունների քանակը:", len(msgs))
 
     if TEST == "0":
-        send(text, photo, CHANNEL)
+        for i, text in enumerate(msgs):
+            send(text, CHANNEL)
+            if i < len(msgs) - 1:
+                time.sleep(3)
     elif TEST == "2" and PREVIEW:
-        send(text, photo, PREVIEW)
+        for i, text in enumerate(msgs):
+            send(text, PREVIEW)
+            if i < len(msgs) - 1:
+                time.sleep(3)
     else:
-        print("--- TEST ---")
-        print(text)
-        print("photo:", photo)
+        for text in msgs:
+            print("--- TEST ---")
+            print(text, "\n")
 
 if __name__ == "__main__":
     main()
