@@ -139,7 +139,13 @@ def main():
         print("Տվյալ չկա")
         sys.exit(1)
 
-    msgs = pack(f"<b>{TITLE}</b>\n{d} {MONTHS[m-1]}", blocks)
+    yday  = now.timetuple().tm_yday
+    total = datetime.date(now.year, 12, 31).timetuple().tm_yday
+    head  = (f"<b>{TITLE}</b>\n"
+             f"{d} {MONTHS[m-1]} — տարվա {yday}-րդ օրն է։\n"
+             f"Տարվա ավարտին մնում է {total - yday} օր։")
+
+    msgs = pack(head, blocks)
     print("հաղորդագրությունների քանակը:", len(msgs))
 
     if TEST == "0":
