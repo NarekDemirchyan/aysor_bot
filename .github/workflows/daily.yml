@@ -18,4 +18,4 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL: "@patmutyun_aysor"
-          TEST: "1"
+          TEST: "0"
