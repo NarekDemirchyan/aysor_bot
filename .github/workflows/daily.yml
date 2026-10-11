@@ -19,3 +19,4 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL: "@patmutyun_aysor"
           TEST: "2"
+          PREVIEW_CHAT: ${{ secrets.PREVIEW_CHAT }}
