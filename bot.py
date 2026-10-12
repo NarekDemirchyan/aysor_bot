@@ -3,7 +3,7 @@ import os, sys, re, html, time, datetime, requests
 TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 CHANNEL = os.environ.get("CHANNEL", "@patmutyun_aysor")
 PREVIEW = os.environ.get("PREVIEW_CHAT", "")
-TEST    = os.environ.get("TEST", "1")
+TEST    = os.environ.get("TEST", "0")
 TZ      = datetime.timezone(datetime.timedelta(hours=4))
 
 HANDLE = "@" + CHANNEL.lstrip("@")
@@ -21,6 +21,7 @@ def wikitext(title):
                                        "formatversion": "2"},
                          headers={"User-Agent": "aysor-bot/1.0"}, timeout=30)
         if r.status_code != 200:
+            print("wiki status:", r.status_code)
             return ""
         return (r.json().get("parse") or {}).get("wikitext") or ""
     except Exception as e:
@@ -83,6 +84,7 @@ def tr(text):
     return text
 
 def events_from_feed(m, d):
+    """Լրացուցիչ աղբյուր՝ միայն եթե հայերեն էջում իրադարձություններ չկան։"""
     out = []
     for e in feed("ru", "selected", m, d):
         txt = clean(tr((e.get("text") or "").strip()))
@@ -124,8 +126,12 @@ def main():
     now = datetime.datetime.now(TZ)
     m, d = now.month, now.day
 
-    sec = parse_sections(wikitext(f"Հոկտեմբերի {d}"))
-    ev = events_from_feed(m, d)
+    title = f"{MONTHS[m - 1]} {d}"          # Հայերեն Վիքիպեդիայի օրվա էջը
+    sec = parse_sections(wikitext(title))
+    print("էջ:", title, "| բաժիններում տողեր:",
+          {k: len(v) for k, v in sec.items()})
+
+    ev = sec.get("Իրադարձություններ") or events_from_feed(m, d)
 
     blocks = []
     if ev:
@@ -140,26 +146,30 @@ def main():
 
     yday  = now.timetuple().tm_yday
     total = datetime.date(now.year, 12, 31).timetuple().tm_yday
-    head  = (f"{d} {MONTHS[m-1]} — տարվա {yday}-րդ օրն է։\n"
+    head  = (f"{d} {MONTHS[m - 1]} — տարվա {yday}-րդ օրն է։\n"
              f"Տարվա ավարտին մնում է {total - yday} օր։")
 
     msgs = pack(head, blocks)
     print("հաղորդագրությունների քանակը:", len(msgs))
 
+    sent = True
     if TEST == "0":
         for i, text in enumerate(msgs):
-            send(text, CHANNEL)
+            sent = send(text, CHANNEL) and sent
             if i < len(msgs) - 1:
                 time.sleep(3)
     elif TEST == "2" and PREVIEW:
         for i, text in enumerate(msgs):
-            send(text, PREVIEW)
+            sent = send(text, PREVIEW) and sent
             if i < len(msgs) - 1:
                 time.sleep(3)
     else:
         for text in msgs:
             print("--- TEST ---")
             print(text, "\n")
+
+    if not sent:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
