@@ -14,8 +14,9 @@ WIKI  = "https://hy.wikipedia.org/w/api.php"
 FEED  = "https://api.wikimedia.org/feed/v1/wikipedia/%s/onthisday/%s/%d/%d"
 HEADS = {"Դեպքեր": "Իրադարձություններ", "Իրադարձություններ": "Իրադարձություններ",
          "Ծնունդներ": "Ծնունդներ", "Մահեր": "Մահեր", "Տոներ": "Տոներ"}
-YEAR  = re.compile(r"\b(1[0-9]{3}|20[0-2][0-9])\b")
-UA    = {"User-Agent": "aysor-bot/1.0"}
+YEAR      = re.compile(r"\b(1[0-9]{3}|20[0-2][0-9])\b")
+YEAR_ONLY = re.compile(r"^(?:մ\.թ\.ա\.\s*)?\d{1,4}\s*[՝:—–-]?$")
+UA        = {"User-Agent": "aysor-bot/1.0"}
 
 def wikitext(title):
     try:
@@ -35,10 +36,9 @@ def clean(s):
     """Տողից դուրս է հանում հղումները, կաղապարները և ձևավորումները։
 
     Պատկերների հղումները դեն են նետվում ամբողջովին, որովհետև դրանց մեջ
-    «thumb»-ը, չափսը («157x157px») և ներքին պարամետրեր են լինում, որոնք
-    հին տարբերակում ընկնում էին տեքստի մեջ։ Կաղապարները հանվում են
-    շերտ առ շերտ, որ ներդրվածներն էլ մաքրվեն, իսկ դրանց մեջ գտնված
-    թվականը պահվում է, որ տողը տարեթիվ չկորցնի։
+    «thumb»-ը, չափսը («157x157px») և ներքին պարամետրեր են լինում։
+    Կաղապարները հանվում են շերտ առ շերտ, իսկ դրանց մեջ գտնված թվականը
+    պահվում է, որ տողը տարեթիվ չկորցնի։
     """
     s = re.sub(r"\[\[(?:Պատկեր|Ֆայլ|File|Image)\s*:[^\]]*\]\]", "", s, flags=re.I)
     s = re.sub(r"<!--.*?-->", "", s, flags=re.S)
@@ -46,11 +46,9 @@ def clean(s):
     s = re.sub(r"<ref.*?</ref>", "", s, flags=re.S)
     kept = []
     def drop(m):
-        if not isinstance(m, str):
-            y = YEAR.search(m.group(0))
-            if y:
-                kept.append(y.group(1))
-            return ""
+        y = YEAR.search(m.group(0))
+        if y:
+            kept.append(y.group(1))
         return ""
     for _ in range(30):
         new = re.sub(r"\{\{[^{}]*\}\}", drop, s)
@@ -70,19 +68,55 @@ def clean(s):
     s = re.sub(r"\s+[–-]\s+", " — ", s)
     return html.escape(s)
 
+def join_line(a, b):
+    return (a + " " + b) if a.endswith(("՝", ":", "—", "–", "-")) else (a + "՝ " + b)
+
 def parse_sections(text):
-    out, cur = {}, None
+    """Բաժինները՝ ներդրված տողերի ճիշտ միացմամբ։
+
+    Ամսաթիվը պարունակող տողը («1984՝») խումբ է բացում, ու նրա տակի
+    ներդրված անունները դառնում են առանձին դիրքեր՝ ամսաթվի հետ միասին։
+    Իսկ ոչ ամսաթվային ծնողի տակի ներդրվածը շարունակություն է, ուստի
+    կպչում է նույն տողին («Քենիաթայի օր (մինչև 2010 թ.)՝ Քենիա»)։
+    """
+    out, cur, pending = {}, None, None
     for line in text.splitlines():
         m = re.match(r"^\s*==+\s*([^=]+?)\s*==+\s*$", line)
         if m:
+            if pending and cur:
+                out[cur].append(pending)
+            pending = None
             cur = HEADS.get(m.group(1).strip())
             if cur:
                 out.setdefault(cur, [])
             continue
-        if cur and line.strip().startswith("*"):
-            item = clean(line.strip().lstrip("*").strip())
-            if item:
-                out[cur].append(item)
+        if not cur:
+            continue
+        raw = line.strip()
+        if not raw.startswith("*"):
+            continue
+        depth = len(raw) - len(raw.lstrip("*"))
+        body = clean(raw.lstrip("*").strip())
+        if not body:
+            continue
+        items = out[cur]
+        if depth == 1:
+            if pending:
+                items.append(pending)
+            if YEAR_ONLY.match(body):
+                pending = body
+            else:
+                pending = None
+                items.append(body)
+            continue
+        if pending:
+            items.append(join_line(pending, body))
+        elif items:
+            items[-1] = join_line(items[-1], body)
+        else:
+            items.append(body)
+    if pending and cur:
+        out[cur].append(pending)
     return out
 
 def feed(lang, kind, m, d):
