@@ -11,15 +11,18 @@ MONTHS = ["հունվարի", "փետրվարի", "մարտի", "ապրիլի", 
           "հուլիսի", "օգոստոսի", "սեպտեմբերի", "հոկտեմբերի", "նոյեմբերի", "դեկտեմբերի"]
 
 WIKI  = "https://hy.wikipedia.org/w/api.php"
-HEADS = {"Դեպքեր": "Իրադարձություններ", "Ծնունդներ": "Ծնունդներ",
-         "Մահեր": "Մահեր", "Տոներ": "Տոներ"}
+FEED  = "https://api.wikimedia.org/feed/v1/wikipedia/%s/onthisday/%s/%d/%d"
+HEADS = {"Դեպքեր": "Իրադարձություններ", "Իրադարձություններ": "Իրադարձություններ",
+         "Ծնունդներ": "Ծնունդներ", "Մահեր": "Մահեր", "Տոներ": "Տոներ"}
+YEAR  = re.compile(r"\b(1[0-9]{3}|20[0-2][0-9])\b")
+UA    = {"User-Agent": "aysor-bot/1.0"}
 
 def wikitext(title):
     try:
         r = requests.get(WIKI, params={"action": "parse", "page": title,
                                        "prop": "wikitext", "format": "json",
                                        "formatversion": "2"},
-                         headers={"User-Agent": "aysor-bot/1.0"}, timeout=30)
+                         headers=UA, timeout=30)
         if r.status_code != 200:
             print("wiki status:", r.status_code)
             return ""
@@ -29,15 +32,42 @@ def wikitext(title):
         return ""
 
 def clean(s):
+    """Տողից դուրս է հանում հղումները, կաղապարները և ձևավորումները։
+
+    Պատկերների հղումները դեն են նետվում ամբողջովին, որովհետև դրանց մեջ
+    «thumb»-ը, չափսը («157x157px») և ներքին պարամետրեր են լինում, որոնք
+    հին տարբերակում ընկնում էին տեքստի մեջ։ Կաղապարները հանվում են
+    շերտ առ շերտ, որ ներդրվածներն էլ մաքրվեն, իսկ դրանց մեջ գտնված
+    թվականը պահվում է, որ տողը տարեթիվ չկորցնի։
+    """
+    s = re.sub(r"\[\[(?:Պատկեր|Ֆայլ|File|Image)\s*:[^\]]*\]\]", "", s, flags=re.I)
+    s = re.sub(r"<!--.*?-->", "", s, flags=re.S)
     s = re.sub(r"<ref[^>]*/>", "", s)
     s = re.sub(r"<ref.*?</ref>", "", s, flags=re.S)
-    s = re.sub(r"\{\{[^{}]*\}\}", "", s)
+    kept = []
+    def drop(m):
+        if not isinstance(m, str):
+            y = YEAR.search(m.group(0))
+            if y:
+                kept.append(y.group(1))
+            return ""
+        return ""
+    for _ in range(30):
+        new = re.sub(r"\{\{[^{}]*\}\}", drop, s)
+        if new == s:
+            break
+        s = new
+    s = re.sub(r"\{\{[^{}]*$", "", s)
     s = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", s)
     s = re.sub(r"\[\[([^\]]*)\]\]", r"\1", s)
     s = re.sub(r"'''?", "", s)
     s = re.sub(r"<[^>]+>", "", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    s = re.sub(r"\s[–-]\s", " — ", s, count=1)
+    s = re.sub(r"\b(?:thumb|thumbnail|mini|frame|border|right|left|center|upright|\d+\s*x\s*\d+\s*px)\b", "", s)
+    s = re.sub(r"\s*\|+\s*", " ", s)
+    s = re.sub(r"\s+", " ", s).strip(" ,;|:")
+    if kept and not YEAR.search(s):
+        s = kept[0] + " — " + s
+    s = re.sub(r"\s+[–-]\s+", " — ", s)
     return html.escape(s)
 
 def parse_sections(text):
@@ -56,11 +86,10 @@ def parse_sections(text):
     return out
 
 def feed(lang, kind, m, d):
-    url = (f"https://api.wikimedia.org/feed/v1/wikipedia/{lang}"
-           f"/onthisday/{kind}/{m}/{d}")
     try:
-        r = requests.get(url, headers={"User-Agent": "aysor-bot/1.0"}, timeout=30)
+        r = requests.get(FEED % (lang, kind, m, d), headers=UA, timeout=30)
         if r.status_code != 200:
+            print("feed %s %s:" % (lang, kind), r.status_code)
             return []
         items = r.json().get(kind) or []
     except Exception as e:
@@ -83,18 +112,25 @@ def tr(text):
         print("translate error:", e)
     return text
 
+def with_year(e, txt):
+    y = e.get("year")
+    if isinstance(y, int):
+        y = ("մ.թ.ա. %d" % abs(y)) if y < 0 else str(y)
+        return "%s — %s" % (y, txt)
+    return txt
+
 def events_from_feed(m, d):
-    """Լրացուցիչ աղբյուր՝ միայն եթե հայերեն էջում իրադարձություններ չկան։"""
-    out = []
-    for e in feed("ru", "selected", m, d):
-        txt = clean(tr((e.get("text") or "").strip()))
-        y = e.get("year")
-        if isinstance(y, int):
-            y = f"մ.թ.ա. {abs(y)}" if y < 0 else str(y)
-            out.append(f"{y} — {txt}")
-        else:
-            out.append(txt)
-    return out
+    """Պահուստային աղբյուր՝ միայն եթե հայերեն էջում իրադարձություններ չկան։
+
+    Նախ հայերենի feed-ը՝ առանց թարգմանության, և միայն եթե այն դատարկ է՝
+    ռուսերենը՝ թարգմանությամբ։
+    """
+    out = [with_year(e, clean((e.get("text") or "").strip()))
+           for e in feed("hy", "selected", m, d)]
+    if out:
+        return out
+    return [with_year(e, clean(tr((e.get("text") or "").strip())))
+            for e in feed("ru", "selected", m, d)]
 
 def pack(head, blocks, limit=4000):
     msgs, cur = [], head + "\n\n"
@@ -119,19 +155,27 @@ def send(text, chat):
     r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
                       json={"chat_id": chat, "text": text, "parse_mode": "HTML",
                             "disable_web_page_preview": True}, timeout=30)
-    print("telegram:", r.status_code, r.text[:200])
-    return r.ok
+    ok = False
+    try:
+        ok = bool(r.json().get("ok"))
+    except Exception:
+        ok = False
+    if not ok:
+        print("telegram:", r.status_code, r.text[:200])
+    return ok
 
 def main():
     now = datetime.datetime.now(TZ)
     m, d = now.month, now.day
 
-    title = f"{MONTHS[m - 1]} {d}"          # Հայերեն Վիքիպեդիայի օրվա էջը
+    title = f"{MONTHS[m - 1]} {d}"
     sec = parse_sections(wikitext(title))
     print("էջ:", title, "| բաժիններում տողեր:",
           {k: len(v) for k, v in sec.items()})
 
     ev = sec.get("Իրադարձություններ") or events_from_feed(m, d)
+    print("իրադարձություններ:", "վիքիից" if sec.get("Իրադարձություններ") else "feed-ից",
+          len(ev))
 
     blocks = []
     if ev:
