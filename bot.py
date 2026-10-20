@@ -15,7 +15,7 @@ FEED  = "https://api.wikimedia.org/feed/v1/wikipedia/%s/onthisday/%s/%d/%d"
 HEADS = {"Դեպքեր": "Իրադարձություններ", "Իրադարձություններ": "Իրադարձություններ",
          "Ծնունդներ": "Ծնունդներ", "Մահեր": "Մահեր", "Տոներ": "Տոներ"}
 YEAR      = re.compile(r"\b(1[0-9]{3}|20[0-2][0-9])\b")
-YEAR_ONLY = re.compile(r"^(?:մ\.թ\.ա\.\s*)?\d{1,4}\s*[՝:]?$")
+YEAR_ONLY = re.compile(r"^(?:մ\.թ\.ա\.\s*)?\d{1,4}\s*[՝:]?\s*(?:—|–|-)?\s*$")
 UA        = {"User-Agent": "aysor-bot/1.0"}
 
 def wikitext(title):
