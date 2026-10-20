@@ -15,7 +15,7 @@ FEED  = "https://api.wikimedia.org/feed/v1/wikipedia/%s/onthisday/%s/%d/%d"
 HEADS = {"Դեպքեր": "Իրադարձություններ", "Իրադարձություններ": "Իրադարձություններ",
          "Ծնունդներ": "Ծնունդներ", "Մահեր": "Մահեր", "Տոներ": "Տոներ"}
 YEAR      = re.compile(r"\b(1[0-9]{3}|20[0-2][0-9])\b")
-YEAR_ONLY = re.compile(r"^(?:մ\.թ\.ա\.\s*)?\d{1,4}\s*[՝:—–-]?$")
+YEAR_ONLY = re.compile(r"^(?:մ\.թ\.ա\.\s*)?\d{1,4}\s*[՝:]?$")
 UA        = {"User-Agent": "aysor-bot/1.0"}
 
 def wikitext(title):
@@ -36,7 +36,7 @@ def clean(s):
     """Տողից դուրս է հանում հղումները, կաղապարները և ձևավորումները։
 
     Պատկերների հղումները դեն են նետվում ամբողջովին, որովհետև դրանց մեջ
-    «thumb»-ը, չափսը («157x157px») և ներքին պարամետրեր են լինում։
+    «thumb»-ը, չափսը («157x157փքս») և ներքին պարամետրեր են լինում։
     Կաղապարները հանվում են շերտ առ շերտ, իսկ դրանց մեջ գտնված թվականը
     պահվում է, որ տողը տարեթիվ չկորցնի։
     """
@@ -60,7 +60,7 @@ def clean(s):
     s = re.sub(r"\[\[([^\]]*)\]\]", r"\1", s)
     s = re.sub(r"'''?", "", s)
     s = re.sub(r"<[^>]+>", "", s)
-    s = re.sub(r"\b(?:thumb|thumbnail|mini|frame|border|right|left|center|upright|\d+\s*x\s*\d+\s*px)\b", "", s)
+    s = re.sub(r"\b(?:thumb|thumbnail|mini|frame|border|right|left|center|upright|\d+\s*x\s*\d+\s*(?:px|փքս))\b", "", s)
     s = re.sub(r"\s*\|+\s*", " ", s)
     s = re.sub(r"\s+", " ", s).strip(" ,;|:")
     if kept and not YEAR.search(s):
@@ -72,21 +72,21 @@ def join_line(a, b):
     return (a + " " + b) if a.endswith(("՝", ":", "—", "–", "-")) else (a + "՝ " + b)
 
 def parse_sections(text):
-    """Բաժինները՝ ներդրված տողերի ճիշտ միացմամբ։
+    """Բաժինները՝ ներդրված տողերի ճիշտ բաշխմամբ։
 
-    Ամսաթիվը պարունակող տողը («1984՝») խումբ է բացում, ու նրա տակի
-    ներդրված անունները դառնում են առանձին դիրքեր՝ ամսաթվի հետ միասին։
-    Իսկ ոչ ամսաթվային ծնողի տակի ներդրվածը շարունակություն է, ուստի
-    կպչում է նույն տողին («Քենիաթայի օր (մինչև 2010 թ.)՝ Քենիա»)։
+    Վիքիպեդիայի օրվա էջում կան երկու տիպի ներդրումներ.
+      * «1984՝» մաքուր ամսաթիվ, որի տակ անուններ են՝ դրանք դառնում են
+        առանձին կետեր՝ ամսաթվի հետ միասին.
+      * «...մասնակիցներ՝» խումբ բացող տող, որի ենթատողերը դառնում են
+        առանձին կետեր՝ խմբի անվանումը կցված.
+      * կարճ բացատրություն (օրինակ «Քենիա»)՝ կպչում է վերևի տողին։
+    Այն ամսաթիվը, որի տակ ոչինչ չկա, դեն է նետվում, որ դատարկ կետ չգա։
     """
-    out, cur, pending = {}, None, None
+    out, cur, group, year = {}, None, None, None
     for line in text.splitlines():
         m = re.match(r"^\s*==+\s*([^=]+?)\s*==+\s*$", line)
         if m:
-            if pending and cur:
-                out[cur].append(pending)
-            pending = None
-            cur = HEADS.get(m.group(1).strip())
+            cur, group, year = HEADS.get(m.group(1).strip()), None, None
             if cur:
                 out.setdefault(cur, [])
             continue
@@ -100,24 +100,34 @@ def parse_sections(text):
         if not body:
             continue
         items = out[cur]
-        if depth == 1:
-            if pending:
-                items.append(pending)
-            if YEAR_ONLY.match(body):
-                pending = body
-            else:
-                pending = None
-                items.append(body)
+        head = body[:-1].strip() if body.endswith(("՝", ":")) else body
+        if YEAR_ONLY.match(body):
+            year = head
+            if depth == 1:
+                group = None
             continue
-        if pending:
-            items.append(join_line(pending, body))
-        elif items:
+        if depth == 1:
+            group, year = None, None
+            items.append(body)
+            continue
+        if year:
+            items.append(join_line(year, body))
+            continue
+        if body.endswith(("՝", ":")):
+            group = head
+            continue
+        if group and YEAR.search(body):
+            items.append(body + ", " + group)
+            continue
+        if items:
             items[-1] = join_line(items[-1], body)
         else:
             items.append(body)
-    if pending and cur:
-        out[cur].append(pending)
     return out
+
+def year_key(item):
+    m = re.match(r"^(?:մ\.թ\.ա\.\s*)?(\d{1,4})", item)
+    return (0, int(m.group(1))) if m else (1, 0)
 
 def feed(lang, kind, m, d):
     try:
@@ -204,6 +214,9 @@ def main():
 
     title = f"{MONTHS[m - 1]} {d}"
     sec = parse_sections(wikitext(title))
+    for name in ("Ծնունդներ", "Մահեր"):
+        if sec.get(name):
+            sec[name].sort(key=year_key)
     print("էջ:", title, "| բաժիններում տողեր:",
           {k: len(v) for k, v in sec.items()})
 
